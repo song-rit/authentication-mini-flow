@@ -1,0 +1,135 @@
+@startuml
+title Autentication (username / password) short flow
+' autonumber
+skinparam ParticipantPadding 100
+skinparam BoxPadding 20
+
+participant web
+
+box K8S_ZONE
+participant bff_web_api
+participant authentication_api
+database k8s_redis
+end box
+
+box EC2_ZONE
+participant user_api
+database ec2_db
+end box
+
+activate web
+web -> bff_web_api : /api/v1/auth/signInWithPassword
+
+' activate authentication_api
+note left
+    Reuqest header
+    - Content-Type: application/json
+    - Method: POST
+
+    Request body
+    - username: username
+    - password: password
+
+end note
+activate bff_web_api
+
+bff_web_api -> bff_web_api : validate request
+bff_web_api -> authentication_api : /api/v1/oauth/auth
+activate authentication_api
+note left
+    
+    Request header
+    - Content-Type: application/x-www-form-urlencoded
+    - Method: POST
+
+    Request body
+    - client_id: bff_web
+    - username: username
+    - password: password
+    - grant_type: password
+    - scope: bff_web
+
+end note
+authentication_api -> authentication_api : validate request
+authentication_api -> k8s_redis : check existing users from k8s_redis
+activate k8s_redis
+k8s_redis --> authentication_api: return redis object
+note right
+    Redis object
+    - user_id: xxxxxx
+end note
+deactivate k8s_redis
+authentication_api -> user_api : /api/v1/validate-credentials
+note left
+    Reuqest header
+    - Content-Type: application/json
+    - Method: POST
+
+    Request body
+    - username: username
+    - password: password
+
+end note
+activate user_api
+user_api -> user_api : validate reqiest
+user_api -> ec2_db : query by username
+activate ec2_db
+ec2_db --> user_api : return
+deactivate ec2_db
+user_api -> user_api : validate credentails
+
+user_api --> authentication_api: return
+deactivate user_api
+
+authentication_api -> authentication_api : generate JWT Token with private key
+note left
+    Access token:
+    {
+        header
+        - alg: rsa256
+        - typ: JWT
+
+        payload
+        - iss
+        - jti
+        - user_id
+        - iat
+        - exp
+        - roles
+
+        signature
+    }
+
+end note
+authentication_api -> k8s_redis : put user session into k8s_redis
+activate k8s_redis
+note left
+    ttl: 300000 milliseconds (5 min)
+
+    Key: user_id:xxxxx
+
+    Redis object value:
+    - access_token
+    - refrech_token
+end note
+k8s_redis -> k8s_redis: save data
+k8s_redis --> authentication_api
+deactivate k8s_redis
+' alt#Gold #LightBlue success
+authentication_api --> bff_web_api : return
+
+bff_web_api --> web : return
+note right
+    Response header
+    - Content-Type: application/json
+
+    Response body
+    - accessToken
+    - RefreshToken
+
+end note
+deactivate authentication_api
+|||
+deactivate bff_web_api
+deactivate web
+@enduml
